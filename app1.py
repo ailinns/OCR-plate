@@ -1,8 +1,9 @@
 """
+Flow การทำงาน
 License Plate Detector — OpenCV → YOLO → Warp → EasyOCR
 """
 import streamlit as st
-import cv2, numpy as np, easyocr, time, csv, os, re, ssl, urllib.request
+import cv2, numpy as np, easyocr, time, csv, os, re, ssl
 from ultralytics import YOLO
 from difflib import get_close_matches
 
@@ -25,26 +26,26 @@ html,body,[class*="css"]{font-family:'Sarabun',sans-serif}
 .tk{background:#1a1a2e;color:#a78bfa;border:1px solid #7c3aed}
 </style>""", unsafe_allow_html=True)
 
-# ── 77 จังหวัด ────────────────────────────────────────────────────────────────
+#จังหวัดใช้สำหรับแก้ไข OCR ที่อ่านผิด
 PROVINCES = ["กรุงเทพมหานคร","กระบี่","กาญจนบุรี","กาฬสินธุ์","กำแพงเพชร","ขอนแก่น","จันทบุรี","ฉะเชิงเทรา","ชลบุรี","ชัยนาท","ชัยภูมิ","ชุมพร","เชียงราย","เชียงใหม่","ตรัง","ตราด","ตาก","นครนายก","นครปฐม","นครพนม","นครราชสีมา","นครศรีธรรมราช","นครสวรรค์","นนทบุรี","นราธิวาส","น่าน","บึงกาฬ","บุรีรัมย์","ปทุมธานี","ประจวบคีรีขันธ์","ปราจีนบุรี","ปัตตานี","พระนครศรีอยุธยา","พะเยา","พังงา","พัทลุง","พิจิตร","พิษณุโลก","เพชรบุรี","เพชรบูรณ์","แพร่","ภูเก็ต","มหาสารคาม","มุกดาหาร","แม่ฮ่องสอน","ยโสธร","ยะลา","ร้อยเอ็ด","ระนอง","ระยอง","ราชบุรี","ลพบุรี","ลำปาง","ลำพูน","เลย","ศรีสะเกษ","สกลนคร","สงขลา","สตูล","สมุทรปราการ","สมุทรสงคราม","สมุทรสาคร","สระแก้ว","สระบุรี","สิงห์บุรี","สุโขทัย","สุพรรณบุรี","สุราษฎร์ธานี","สุรินทร์","หนองคาย","หนองบัวลำภู","อ่างทอง","อำนาจเจริญ","อุดรธานี","อุตรดิตถ์","อุทัยธานี","อุบลราชธานี"]
 def province(text):
     m = get_close_matches(text.strip(), PROVINCES, n=1, cutoff=0.5)
     return m[0] if m else text.strip() or "—"
 
-# ── Models ────────────────────────────────────────────────────────────────────
+#โมเดล
 @st.cache_resource
 def load_models(path):
-    return easyocr.Reader(["th","en"], gpu=False), YOLO(path)
+    return easyocr.Reader(["th","en"], gpu=True), YOLO(path)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+#อ่านป้ายแม่นขึ้น
 THAI   = set("กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
 ALLOW  = "".join(THAI)+"0123456789"
 D2C    = {"5":"ร","8":"ถ"}
 C2D    = {"ต":"6","ร":"5","ง":"9","ว":"0","ใ":"1","ไ":"1","ก":"6","O":"0","o":"0","I":"1","l":"1"}
 C2C    = {"ธ":"ฐ","ฑ":"ฏ"}
 ASPECT = {"car-license-plate":2.8,"motorcycle-license-plate":1.0,"license plate car":2.8,"license plate motorcycle":1.0}
+CLAHE  = cv2.createCLAHE(3.0,(4,4))  # สร้างครั้งเดียว ไม่สร้างใหม่ทุก frame
 
-# ── Warp helpers ──────────────────────────────────────────────────────────────
 def _order(pts):
     r=np.zeros((4,2),dtype="float32"); s=pts.sum(1); d=np.diff(pts,axis=1)
     r[0]=pts[np.argmin(s)]; r[2]=pts[np.argmax(s)]; r[1]=pts[np.argmin(d)]; r[3]=pts[np.argmax(d)]
@@ -56,13 +57,11 @@ def _rotate(img, deg):
     return cv2.warpAffine(img,M,(w,h),flags=cv2.INTER_CUBIC,borderMode=cv2.BORDER_REPLICATE)
 
 def _find_quad(crop):
-    """GrabCut → quad, fallback Edge → quad"""
     H,W=crop.shape[:2]
-    # GrabCut
     try:
         mask=np.zeros((H,W),np.uint8); mx,my=int(W*.05),int(H*.05)
         bgd,fgd=np.zeros((1,65),np.float64),np.zeros((1,65),np.float64)
-        cv2.grabCut(crop,mask,(mx,my,max(1,W-2*mx),max(1,H-2*my)),bgd,fgd,3,cv2.GC_INIT_WITH_RECT)
+        cv2.grabCut(crop,mask,(mx,my,max(1,W-2*mx),max(1,H-2*my)),bgd,fgd,2,cv2.GC_INIT_WITH_RECT)
         fg=np.where((mask==cv2.GC_FGD)|(mask==cv2.GC_PR_FGD),255,0).astype("uint8")
         k=cv2.getStructuringElement(cv2.MORPH_RECT,(9,9))
         fg=cv2.morphologyEx(cv2.morphologyEx(fg,cv2.MORPH_CLOSE,k,iterations=2),cv2.MORPH_OPEN,k,iterations=1)
@@ -84,8 +83,7 @@ def _find_quad(crop):
     return cv2.boxPoints(cv2.minAreaRect(max(cnts,key=cv2.contourArea))).astype(np.float32)
 
 def warp_plate(crop, aspect=2.8):
-    """ขึงภาพ: pre-deskew → GrabCut/Edge quad → perspective warp → fine deskew → threshold"""
-    # pre-deskew
+    """ขึงภาพ"""
     gray0=cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY)
     _,th0=cv2.threshold(gray0,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
     cnts0,_=cv2.findContours(th0,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
@@ -109,7 +107,6 @@ def warp_plate(crop, aspect=2.8):
     else:
         warped=cv2.resize(crop,(out_w,out_h),interpolation=cv2.INTER_CUBIC)
 
-    # fine deskew via Hough
     g2=cv2.GaussianBlur(cv2.cvtColor(warped,cv2.COLOR_BGR2GRAY),(5,5),0)
     lines=cv2.HoughLinesP(cv2.Canny(g2,60,180),1,np.pi/180,80,
                           minLineLength=int(0.35*warped.shape[1]),maxLineGap=25)
@@ -126,27 +123,30 @@ def warp_plate(crop, aspect=2.8):
     gray=cv2.filter2D(gray,-1,np.array([[0,-1,0],[-1,5,-1],[0,-1,0]],np.float32))
     _,t1=cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
     t2=cv2.adaptiveThreshold(gray,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,31,10)
-    clahe=cv2.createCLAHE(3.0,(4,4)); _,t3=cv2.threshold(clahe.apply(gray),0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    clahe=CLAHE; _,t3=cv2.threshold(clahe.apply(gray),0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
     def sc(t): return -abs(np.sum(t==0)/t.size-0.30)
     th=cv2.copyMakeBorder(max([t1,t2,t3],key=sc),12,12,20,20,cv2.BORDER_CONSTANT,value=255)
     return warped_rgb, th
 
-# ── OCR ───────────────────────────────────────────────────────────────────────
 def fix(text):
     s=text.replace(" ",""); chars=list(s); n=len(chars)
-    for i in range(n):                        # digit→consonant ถ้าตามด้วย Thai
+    for i in range(n):                 
         if chars[i] in D2C and i<n-1 and chars[i+1] in THAI: chars[i]=D2C[chars[i]]
-    for i in range(n): chars[i]=C2C.get(chars[i],chars[i])  # consonant misread
+    for i in range(n): chars[i]=C2C.get(chars[i],chars[i])
     ti=[i for i,c in enumerate(chars) if c in THAI]
     if ti:
         for i in range(n):
             if (i<ti[0] or i>ti[-1]) and chars[i] in THAI: chars[i]=C2D.get(chars[i],chars[i])
+    # ถ้าตัวอักษรไทยเกิน 2 ตัว → ตัวแรกสุดที่เป็นไทยให้แปลงเป็นตัวเลข
+    ti2=[i for i,c in enumerate(chars) if c in THAI]
+    if len(ti2)>2:
+        chars[ti2[0]]=C2D.get(chars[ti2[0]],chars[ti2[0]])
     f="".join(chars)
     return re.sub(r"([0-9])([ก-๙])",r"\1 \2",re.sub(r"([ก-๙])([0-9])",r"\1 \2",f)).strip()
 
 def read_plate(reader, th, v_type="Car"):
-    raw=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW)
-              +reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip()]
+    r1=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW) if r[2]>0.05 and r[1].strip()]
+    raw=r1 if r1 else [r for r in reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip()]
     seen,uniq=set(),[]
     for r in raw:
         k=(round(r[0][0][0]/10),round(r[0][0][1]/10))
@@ -171,7 +171,6 @@ def read_plate(reader, th, v_type="Car"):
         return texts[0],"—",round(conf*100,1)
     return texts[0], (province(texts[-1]) if len(texts)>1 else "—"), round(conf*100,1)
 
-# ── UI helpers ────────────────────────────────────────────────────────────────
 def vtype(label,x1,y1,x2,y2):
     moto="Motorcycle" in label; ratio=(x2-x1)/max(y2-y1,1)<1.7
     return ("Motorcycle" if moto else "Car") if moto==ratio else ("Motorcycle" if ratio else "Car")
@@ -207,47 +206,43 @@ def save_log(plate,prov,vt,frame):
     cv2.imwrite(path,frame)
     with open("logs.csv","a",newline="",encoding="utf-8") as f: csv.writer(f).writerow([ts,plate,prov,vt,path])
 
-# ── Session state ─────────────────────────────────────────────────────────────
 for k,v in [("run",False),("last",""),("lt",0)]:
     if k not in st.session_state: st.session_state[k]=v
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+
 with st.sidebar:
-    st.markdown("### ⚙️ Config")
+    st.markdown("ตั้งค่า")
     model_path  = st.text_input("Model path","vehicle_detector.pt")
     conf_thresh = st.slider("YOLO confidence",0.1,0.9,0.5,0.05)
     ocr_ivl     = st.slider("OCR interval (วิ)",0.5,5.0,2.0,0.5)
-    if st.button("📂 logs.csv"):
+    if st.button("logs.csv"):
         if os.path.exists("logs.csv"):
             import pandas as pd
             st.dataframe(pd.read_csv("logs.csv",header=None,
                          names=["time","plate","province","type","file"]).tail(20))
         else: st.info("ยังไม่มี log")
 
-# ── App ───────────────────────────────────────────────────────────────────────
-st.markdown("# 🚗 License Plate Detector")
+st.markdown("#License Plate Detector")
 if not os.path.exists(model_path): st.error(f"ไม่พบ {model_path}"); st.stop()
 
-with st.spinner("Loading…"):
+with st.spinner("กำลังโหลด..."):
     reader, model = load_models(model_path)
-st.success("Ready ✓", icon="✅")
+st.success("พร้อมใช้งาน")
 
 
-tab_cam, tab_img = st.tabs(["🎥 Webcam","📷 Upload"])
-
-# ── Webcam tab ────────────────────────────────────────────────────────────────
+tab_cam, tab_img = st.tabs(["Webcam","Upload"])
 with tab_cam:
     c1,c2=st.columns(2)
     with c1:
-        if st.button("▶️ Start",use_container_width=True): st.session_state.run=True
+        if st.button("เริ่มเปิดกล้อง",use_container_width=True): st.session_state.run=True
     with c2:
-        if st.button("⏹ Stop", use_container_width=True): st.session_state.run=False
+        if st.button("หยุดการทำงาน", use_container_width=True): st.session_state.run=False
     fb=st.empty(); ib=st.empty(); cb=st.empty()
 
     if st.session_state.run:
-        cap=cv2.VideoCapture(1,cv2.CAP_DSHOW)
+        cap=cv2.VideoCapture(0,cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-        if not cap.isOpened(): st.error("❌ เปิดกล้องไม่ได้"); st.session_state.run=False
+        if not cap.isOpened(): st.error("ไม่สามารถเปิดกล้องได้"); st.session_state.run=False
         else:
             fn=0; cache=[]
             while st.session_state.run:
@@ -271,7 +266,7 @@ with tab_cam:
                             pl,pv,co=read_plate(reader,th,vt)
                             if pl and pl!=st.session_state.last: st.session_state.last=pl; save_log(pl,pv,vt,frame)
                             st.session_state.lt=time.time()
-                            vth="🏍️ มอเตอร์ไซค์" if vt=="Motorcycle" else "🚗 รถยนต์"
+                            vth="มอเตอร์ไซค์" if vt=="Motorcycle" else "รถยนต์"
                             ib.markdown(card({"vt":vt,"vth":vth,"cy":d["conf"]*100,"co":co,"plate":pl,"prov":pv}),unsafe_allow_html=True)
                             cb.image(wr,caption="ขึงแล้ว",width=300)
                         except Exception: st.session_state.lt=time.time()
@@ -279,7 +274,6 @@ with tab_cam:
                 fb.image(cv2.resize(disp,(640,360)),channels="BGR",use_container_width=True)
             cap.release()
 
-# ── Upload tab ────────────────────────────────────────────────────────────────
 with tab_img:
     uploaded=st.file_uploader("เลือกรูปภาพ",type=["jpg","jpeg","png","bmp"])
     if uploaded:
@@ -297,11 +291,11 @@ with tab_img:
                 asp=ASPECT.get(label.strip().lower(),1.0 if vt=="Motorcycle" else 2.8)
                 wr,th=warp_plate(frame[y1:y2,x1:x2],asp); pl,pv,co=read_plate(reader,th,vt)
                 draw_box(disp,x1,y1,x2,y2,pl,vt,conf_y*100)
-                found.append({"vt":vt,"vth":"🏍️ มอเตอร์ไซค์" if vt=="Motorcycle" else "🚗 รถยนต์",
+                found.append({"vt":vt,"vth":"มอเตอร์ไซค์" if vt=="Motorcycle" else "รถยนต์",
                               "cy":round(conf_y*100,1),"co":co,"plate":pl,"prov":pv,"crop":wr})
         with cb: st.markdown("**ผลลัพธ์**"); st.image(cv2.cvtColor(disp,cv2.COLOR_BGR2RGB),width=420)
         if found:
-            st.markdown("---"); st.markdown("### 🏷️ ป้ายทะเบียนที่พบ")
+            st.markdown("---"); st.markdown("ป้ายทะเบียนที่พบ")
             cols=st.columns(min(len(found),3))
             for i,r in enumerate(found):
                 with cols[i%3]:
