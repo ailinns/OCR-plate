@@ -35,7 +35,7 @@ def province(text):
 #โมเดล
 @st.cache_resource
 def load_models(path):
-    return easyocr.Reader(["th","en"], gpu=True), YOLO(path)
+    return easyocr.Reader(["th","en"], gpu=False), YOLO(path)
 
 #อ่านป้ายแม่นขึ้น
 THAI   = set("กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
@@ -44,7 +44,6 @@ D2C    = {"5":"ร","8":"ถ"}
 C2D    = {"ต":"6","ร":"5","ง":"9","ว":"0","ใ":"1","ไ":"1","ก":"6","O":"0","o":"0","I":"1","l":"1"}
 C2C    = {"ธ":"ฐ","ฑ":"ฏ"}
 ASPECT = {"car-license-plate":2.8,"motorcycle-license-plate":1.0,"license plate car":2.8,"license plate motorcycle":1.0}
-CLAHE  = cv2.createCLAHE(3.0,(4,4))  # สร้างครั้งเดียว ไม่สร้างใหม่ทุก frame
 
 def _order(pts):
     r=np.zeros((4,2),dtype="float32"); s=pts.sum(1); d=np.diff(pts,axis=1)
@@ -61,7 +60,7 @@ def _find_quad(crop):
     try:
         mask=np.zeros((H,W),np.uint8); mx,my=int(W*.05),int(H*.05)
         bgd,fgd=np.zeros((1,65),np.float64),np.zeros((1,65),np.float64)
-        cv2.grabCut(crop,mask,(mx,my,max(1,W-2*mx),max(1,H-2*my)),bgd,fgd,2,cv2.GC_INIT_WITH_RECT)
+        cv2.grabCut(crop,mask,(mx,my,max(1,W-2*mx),max(1,H-2*my)),bgd,fgd,3,cv2.GC_INIT_WITH_RECT)
         fg=np.where((mask==cv2.GC_FGD)|(mask==cv2.GC_PR_FGD),255,0).astype("uint8")
         k=cv2.getStructuringElement(cv2.MORPH_RECT,(9,9))
         fg=cv2.morphologyEx(cv2.morphologyEx(fg,cv2.MORPH_CLOSE,k,iterations=2),cv2.MORPH_OPEN,k,iterations=1)
@@ -123,7 +122,7 @@ def warp_plate(crop, aspect=2.8):
     gray=cv2.filter2D(gray,-1,np.array([[0,-1,0],[-1,5,-1],[0,-1,0]],np.float32))
     _,t1=cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
     t2=cv2.adaptiveThreshold(gray,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,31,10)
-    clahe=CLAHE; _,t3=cv2.threshold(clahe.apply(gray),0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    clahe=cv2.createCLAHE(3.0,(4,4)); _,t3=cv2.threshold(clahe.apply(gray),0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
     def sc(t): return -abs(np.sum(t==0)/t.size-0.30)
     th=cv2.copyMakeBorder(max([t1,t2,t3],key=sc),12,12,20,20,cv2.BORDER_CONSTANT,value=255)
     return warped_rgb, th
@@ -137,16 +136,12 @@ def fix(text):
     if ti:
         for i in range(n):
             if (i<ti[0] or i>ti[-1]) and chars[i] in THAI: chars[i]=C2D.get(chars[i],chars[i])
-    # ถ้าตัวอักษรไทยเกิน 2 ตัว → ตัวแรกสุดที่เป็นไทยให้แปลงเป็นตัวเลข
-    ti2=[i for i,c in enumerate(chars) if c in THAI]
-    if len(ti2)>2:
-        chars[ti2[0]]=C2D.get(chars[ti2[0]],chars[ti2[0]])
     f="".join(chars)
     return re.sub(r"([0-9])([ก-๙])",r"\1 \2",re.sub(r"([ก-๙])([0-9])",r"\1 \2",f)).strip()
 
 def read_plate(reader, th, v_type="Car"):
-    r1=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW) if r[2]>0.05 and r[1].strip()]
-    raw=r1 if r1 else [r for r in reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip()]
+    raw=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW)
+              +reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip()]
     seen,uniq=set(),[]
     for r in raw:
         k=(round(r[0][0][0]/10),round(r[0][0][1]/10))
@@ -215,6 +210,7 @@ with st.sidebar:
     model_path  = st.text_input("Model path","vehicle_detector.pt")
     conf_thresh = st.slider("YOLO confidence",0.1,0.9,0.5,0.05)
     ocr_ivl     = st.slider("OCR interval (วิ)",0.5,5.0,2.0,0.5)
+    cam_index   = st.number_input("Camera index (0=กล้องในตัว, 1=Camo...)",min_value=0,max_value=2,value=0,step=1)
     if st.button("logs.csv"):
         if os.path.exists("logs.csv"):
             import pandas as pd
@@ -240,7 +236,7 @@ with tab_cam:
     fb=st.empty(); ib=st.empty(); cb=st.empty()
 
     if st.session_state.run:
-        cap=cv2.VideoCapture(0,cv2.CAP_DSHOW)
+        cap=cv2.VideoCapture(int(cam_index),cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
         if not cap.isOpened(): st.error("ไม่สามารถเปิดกล้องได้"); st.session_state.run=False
         else:
