@@ -9,7 +9,11 @@ from difflib import get_close_matches
 
 ssl._create_default_https_context = ssl._create_unverified_context
 
-st.set_page_config(page_title="License Plate Detector", page_icon="🚗", layout="wide")
+st.markdown("""
+<div style='text-align:center; padding: 10px 0'>
+    <span style='font-size:2.5rem; font-weight:700; color:#34d399'>License Plate Detector</span>
+</div>
+""", unsafe_allow_html=True)
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap');
 html,body,[class*="css"]{font-family:'Sarabun',sans-serif}
@@ -25,6 +29,7 @@ html,body,[class*="css"]{font-family:'Sarabun',sans-serif}
 .tm{background:#3b1f00;color:#fbbf24;border:1px solid #d97706}
 .tk{background:#1a1a2e;color:#a78bfa;border:1px solid #7c3aed}
 </style>""", unsafe_allow_html=True)
+
 
 #จังหวัดใช้สำหรับแก้ไข OCR ที่อ่านผิด
 PROVINCES = ["กรุงเทพมหานคร","กระบี่","กาญจนบุรี","กาฬสินธุ์","กำแพงเพชร","ขอนแก่น","จันทบุรี","ฉะเชิงเทรา","ชลบุรี","ชัยนาท","ชัยภูมิ","ชุมพร","เชียงราย","เชียงใหม่","ตรัง","ตราด","ตาก","นครนายก","นครปฐม","นครพนม","นครราชสีมา","นครศรีธรรมราช","นครสวรรค์","นนทบุรี","นราธิวาส","น่าน","บึงกาฬ","บุรีรัมย์","ปทุมธานี","ประจวบคีรีขันธ์","ปราจีนบุรี","ปัตตานี","พระนครศรีอยุธยา","พะเยา","พังงา","พัทลุง","พิจิตร","พิษณุโลก","เพชรบุรี","เพชรบูรณ์","แพร่","ภูเก็ต","มหาสารคาม","มุกดาหาร","แม่ฮ่องสอน","ยโสธร","ยะลา","ร้อยเอ็ด","ระนอง","ระยอง","ราชบุรี","ลพบุรี","ลำปาง","ลำพูน","เลย","ศรีสะเกษ","สกลนคร","สงขลา","สตูล","สมุทรปราการ","สมุทรสงคราม","สมุทรสาคร","สระแก้ว","สระบุรี","สิงห์บุรี","สุโขทัย","สุพรรณบุรี","สุราษฎร์ธานี","สุรินทร์","หนองคาย","หนองบัวลำภู","อ่างทอง","อำนาจเจริญ","อุดรธานี","อุตรดิตถ์","อุทัยธานี","อุบลราชธานี"]
@@ -218,7 +223,6 @@ with st.sidebar:
                          names=["time","plate","province","type","file"]).tail(20))
         else: st.info("ยังไม่มี log")
 
-st.markdown("#License Plate Detector")
 if not os.path.exists(model_path): st.error(f"ไม่พบ {model_path}"); st.stop()
 
 with st.spinner("กำลังโหลด..."):
