@@ -210,7 +210,7 @@ with st.sidebar:
     model_path  = st.text_input("Model path","vehicle_detector.pt")
     conf_thresh = st.slider("YOLO confidence",0.1,0.9,0.5,0.05)
     ocr_ivl     = st.slider("OCR interval (วิ)",0.5,5.0,2.0,0.5)
-    cam_index   = st.number_input("Camera index (0=กล้องในตัว, 1=Camo...)",min_value=0,max_value=2,value=0,step=1)
+    cam_index   = st.number_input("Camera index (0=กล้องในตัว, 1=Camo Camere)",min_value=0,max_value=2,value=0,step=1)
     if st.button("logs.csv"):
         if os.path.exists("logs.csv"):
             import pandas as pd
