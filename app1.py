@@ -30,12 +30,15 @@ html,body,[class*="css"]{font-family:'Sarabun',sans-serif}
 .tk{background:#1a1a2e;color:#a78bfa;border:1px solid #7c3aed}
 </style>""", unsafe_allow_html=True)
 
-
 #จังหวัดใช้สำหรับแก้ไข OCR ที่อ่านผิด
 PROVINCES = ["กรุงเทพมหานคร","กระบี่","กาญจนบุรี","กาฬสินธุ์","กำแพงเพชร","ขอนแก่น","จันทบุรี","ฉะเชิงเทรา","ชลบุรี","ชัยนาท","ชัยภูมิ","ชุมพร","เชียงราย","เชียงใหม่","ตรัง","ตราด","ตาก","นครนายก","นครปฐม","นครพนม","นครราชสีมา","นครศรีธรรมราช","นครสวรรค์","นนทบุรี","นราธิวาส","น่าน","บึงกาฬ","บุรีรัมย์","ปทุมธานี","ประจวบคีรีขันธ์","ปราจีนบุรี","ปัตตานี","พระนครศรีอยุธยา","พะเยา","พังงา","พัทลุง","พิจิตร","พิษณุโลก","เพชรบุรี","เพชรบูรณ์","แพร่","ภูเก็ต","มหาสารคาม","มุกดาหาร","แม่ฮ่องสอน","ยโสธร","ยะลา","ร้อยเอ็ด","ระนอง","ระยอง","ราชบุรี","ลพบุรี","ลำปาง","ลำพูน","เลย","ศรีสะเกษ","สกลนคร","สงขลา","สตูล","สมุทรปราการ","สมุทรสงคราม","สมุทรสาคร","สระแก้ว","สระบุรี","สิงห์บุรี","สุโขทัย","สุพรรณบุรี","สุราษฎร์ธานี","สุรินทร์","หนองคาย","หนองบัวลำภู","อ่างทอง","อำนาจเจริญ","อุดรธานี","อุตรดิตถ์","อุทัยธานี","อุบลราชธานี"]
+_TONE = str.maketrans("","","็่้๊๋์ํ๎")
+def _norm(s): return s.strip().translate(_TONE)
+_PROV_NORM = {_norm(p): p for p in PROVINCES}
+
 def province(text):
-    m = get_close_matches(text.strip(), PROVINCES, n=1, cutoff=0.5)
-    return m[0] if m else text.strip() or "—"
+    p=_match_province(text)
+    return p if p else (text.strip() or "—")
 
 #โมเดล
 @st.cache_resource
@@ -46,9 +49,9 @@ def load_models(path):
 THAI   = set("กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
 ALLOW  = "".join(THAI)+"0123456789"
 D2C    = {"5":"ร","8":"ถ"}
-C2D    = {"ต":"6","ร":"5","ง":"9","ว":"0","ใ":"1","ไ":"1","ก":"6","O":"0","o":"0","I":"1","l":"1"}
-C2C    = {"ธ":"ฐ","ฑ":"ฏ"}
-ASPECT = {"car-license-plate":2.8,"motorcycle-license-plate":1.0,"license plate car":2.8,"license plate motorcycle":1.0}
+C2D    = {"ต":"6","ร":"5","ว":"0","น":"0","ใ":"1","ไ":"1","O":"0","o":"0","I":"1","l":"1"}
+C2C    = {"ฐ":"ธ","ฑ":"ฏ","ณ":"ฌ","ภ":"ก","ฒ":"ค","บ":"ป","ป":"บ"}
+ASPECT = {"car-license-plate":2.8,"motorcycle-license-plate":1.4,"license plate car":2.8,"license plate motorcycle":1.4}
 
 def _order(pts):
     r=np.zeros((4,2),dtype="float32"); s=pts.sum(1); d=np.diff(pts,axis=1)
@@ -65,7 +68,7 @@ def _find_quad(crop):
     try:
         mask=np.zeros((H,W),np.uint8); mx,my=int(W*.05),int(H*.05)
         bgd,fgd=np.zeros((1,65),np.float64),np.zeros((1,65),np.float64)
-        cv2.grabCut(crop,mask,(mx,my,max(1,W-2*mx),max(1,H-2*my)),bgd,fgd,3,cv2.GC_INIT_WITH_RECT)
+        cv2.grabCut(crop,mask,(mx,my,max(1,W-2*mx),max(1,H-2*my)),bgd,fgd,2,cv2.GC_INIT_WITH_RECT)
         fg=np.where((mask==cv2.GC_FGD)|(mask==cv2.GC_PR_FGD),255,0).astype("uint8")
         k=cv2.getStructuringElement(cv2.MORPH_RECT,(9,9))
         fg=cv2.morphologyEx(cv2.morphologyEx(fg,cv2.MORPH_CLOSE,k,iterations=2),cv2.MORPH_OPEN,k,iterations=1)
@@ -88,6 +91,13 @@ def _find_quad(crop):
 
 def warp_plate(crop, aspect=2.8):
     """ขึงภาพ"""
+    # แก้ไข: ลด border crop จาก 5%/8% เหลือ 1%/0%
+    # เพื่อไม่ตัดตัวเลขออก (pad_box เพิ่ม 30% ไว้แล้ว)
+    H0,W0=crop.shape[:2]
+    bx,by_top=int(W0*0.01),int(H0*0.01)
+    if W0-2*bx>20 and H0-by_top>20:
+        crop=crop[by_top:H0, bx:W0-bx]
+
     gray0=cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY)
     _,th0=cv2.threshold(gray0,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
     cnts0,_=cv2.findContours(th0,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
@@ -96,7 +106,8 @@ def warp_plate(crop, aspect=2.8):
         if ang<-45: ang=90+ang
         crop=_rotate(crop,float(np.clip(ang,-20,20)))
 
-    H,W=crop.shape[:2]; out_w=400; out_h=max(60,int(out_w/aspect))
+    H,W=crop.shape[:2]
+    out_w=400 if aspect>=1.8 else max(280,int(400*aspect)); out_h=max(80,int(out_w/aspect))
     quad=_find_quad(crop)
 
     if quad is not None:
@@ -119,7 +130,6 @@ def warp_plate(crop, aspect=2.8):
               if abs(x2-x1)>=2 and abs(np.degrees(np.arctan2(y2-y1,x2-x1)))<=25]
         if angs: warped=_rotate(warped,-float(np.clip(np.median(angs),-20,20)))
 
-    # scale up + threshold
     wH,wW=warped.shape[:2]
     if wW<400: warped=cv2.resize(warped,(400,int(wH*400/max(wW,1))),interpolation=cv2.INTER_CUBIC)
     warped_rgb=cv2.cvtColor(warped,cv2.COLOR_BGR2RGB)
@@ -134,19 +144,55 @@ def warp_plate(crop, aspect=2.8):
 
 def fix(text):
     s=text.replace(" ",""); chars=list(s); n=len(chars)
-    for i in range(n):                 
+    for i in range(n):
         if chars[i] in D2C and i<n-1 and chars[i+1] in THAI: chars[i]=D2C[chars[i]]
     for i in range(n): chars[i]=C2C.get(chars[i],chars[i])
     ti=[i for i,c in enumerate(chars) if c in THAI]
     if ti:
         for i in range(n):
             if (i<ti[0] or i>ti[-1]) and chars[i] in THAI: chars[i]=C2D.get(chars[i],chars[i])
+    ti2=[i for i,c in enumerate(chars) if c in THAI]
+    if len(ti2)>2:
+        chars[ti2[0]]=C2D.get(chars[ti2[0]],chars[ti2[0]])
     f="".join(chars)
     return re.sub(r"([0-9])([ก-๙])",r"\1 \2",re.sub(r"([ก-๙])([0-9])",r"\1 \2",f)).strip()
 
+def _match_province(text):
+    t=text.strip()
+    thai_cnt=sum(1 for c in t if '\u0e00'<=c<='\u0e7f')
+    if thai_cnt<4: return None
+    n=_norm(t)
+    if n in _PROV_NORM: return _PROV_NORM[n]
+    keys=list(_PROV_NORM.keys())
+    m=get_close_matches(n,keys,n=1,cutoff=0.42)
+    return _PROV_NORM[m[0]] if m else None
+
+def _is_plate_token(text):
+    t=text.strip()
+    if not t: return False
+    clean=t.replace(" ","")
+    thai_cnt=sum(1 for c in clean if c in THAI)
+    digit_cnt=sum(1 for c in clean if c.isdigit())
+    eng_cnt=sum(1 for c in clean if c.isalpha() and c.isascii())
+    eng_upper=sum(1 for c in clean if c.isupper() and c.isascii())
+    eng_lower=sum(1 for c in clean if c.islower() and c.isascii())
+    if eng_upper>=3 and thai_cnt==0: return False
+    if eng_lower>1: return False
+    if thai_cnt>6 and digit_cnt==0:
+        if thai_cnt <= 8: return True
+        n_clean = clean.translate(_TONE)
+        if n_clean in _PROV_NORM: return True
+        if get_close_matches(n_clean, list(_PROV_NORM.keys()), n=1, cutoff=0.72): return True
+        return False
+    if len(clean)>10 and thai_cnt>0 and digit_cnt>0: return False
+    if digit_cnt>8 and thai_cnt==0 and eng_cnt==0: return False
+    return True
+
 def read_plate(reader, th, v_type="Car"):
-    raw=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW)
-              +reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip()]
+    r1=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW) if r[2]>0.05 and r[1].strip() and _is_plate_token(r[1])]
+    raw=r1 if r1 else [r for r in reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip() and _is_plate_token(r[1])]
+    raw+=[ r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW,width_ths=0.5,height_ths=0.5)
+           if r[2]>0.05 and r[1].strip() and _is_plate_token(r[1])]
     seen,uniq=set(),[]
     for r in raw:
         k=(round(r[0][0][0]/10),round(r[0][0][1]/10))
@@ -154,7 +200,10 @@ def read_plate(reader, th, v_type="Car"):
     if not uniq: return "—","—",0.0
     def cy(r): return (r[0][0][1]+r[0][2][1])/2
     def cx(r): return (r[0][0][0]+r[0][1][0])/2
-    uniq.sort(key=cy); thr=th.shape[0]*0.2
+    def rh(r): return abs(r[0][2][1]-r[0][0][1])
+    uniq.sort(key=cy)
+    med_h=np.median([rh(r) for r in uniq]) if uniq else th.shape[0]*0.2
+    thr=max(med_h*0.45, th.shape[0]*0.06)
     rows,cur=[],[uniq[0]]
     for r in uniq[1:]:
         if abs(cy(r)-cy(cur[-1]))<thr: cur.append(r)
@@ -164,16 +213,36 @@ def read_plate(reader, th, v_type="Car"):
     texts=[fix(" ".join(r[1] for r in row)) for row in rows]
     conf=max(r[2] for r in uniq)
     if v_type=="Motorcycle":
+        prov_idx,prov_val=-1,"—"
+        for i,t in enumerate(texts):
+            p=_match_province(t)
+            if p: prov_idx=i; prov_val=p; break
+        if prov_idx>=0:
+            num_rows=[t for i,t in enumerate(texts) if i!=prov_idx and re.search(r"[0-9]",t)]
+            char_rows=[t for i,t in enumerate(texts) if i!=prov_idx and not re.search(r"[0-9]",t)]
+            plate=" ".join(char_rows+num_rows).strip() or texts[0]
+            return plate,prov_val,round(conf*100,1)
         if len(texts)>=3: return f"{texts[0]} {texts[-1]}",province(texts[1]),round(conf*100,1)
         if len(texts)==2:
             return (texts[1],province(texts[0]),round(conf*100,1)) if get_close_matches(texts[0],PROVINCES,n=1,cutoff=0.5) \
                    else (texts[0],province(texts[1]),round(conf*100,1))
         return texts[0],"—",round(conf*100,1)
+    if len(texts)==1: return texts[0],"—",round(conf*100,1)
+    prov_idx2,prov_val2=-1,"—"
+    for i,t in enumerate(texts):
+        p=_match_province(t)
+        if p: prov_idx2=i; prov_val2=p; break
+    if prov_idx2>=0:
+        plate_rows=[t for i,t in enumerate(texts) if i!=prov_idx2]
+        return " ".join(plate_rows),prov_val2,round(conf*100,1)
     return texts[0], (province(texts[-1]) if len(texts)>1 else "—"), round(conf*100,1)
 
 def vtype(label,x1,y1,x2,y2):
-    moto="Motorcycle" in label; ratio=(x2-x1)/max(y2-y1,1)<1.7
-    return ("Motorcycle" if moto else "Car") if moto==ratio else ("Motorcycle" if ratio else "Car")
+    ratio=(x2-x1)/max(y2-y1,1)
+    moto_label="Motorcycle" in label
+    if ratio>=2.0: return "Car"
+    if ratio<=0.9: return "Motorcycle"
+    return "Motorcycle" if moto_label else "Car"
 
 def draw_box(frame,x1,y1,x2,y2,txt,vt,conf):
     col=(251,191,36) if vt=="Motorcycle" else (52,211,153)
@@ -209,13 +278,12 @@ def save_log(plate,prov,vt,frame):
 for k,v in [("run",False),("last",""),("lt",0)]:
     if k not in st.session_state: st.session_state[k]=v
 
-
 with st.sidebar:
     st.markdown("ตั้งค่า")
     model_path  = st.text_input("Model path","vehicle_detector.pt")
-    conf_thresh = st.slider("YOLO confidence",0.1,0.9,0.5,0.05)
+    conf_thresh = st.slider("YOLO confidence",0.1,0.9,0.35,0.05)
     ocr_ivl     = st.slider("OCR interval (วิ)",0.5,5.0,2.0,0.5)
-    cam_index   = st.number_input("Camera index (0=กล้องในตัว, 1=Camo Camere)",min_value=0,max_value=2,value=0,step=1)
+    cam_index   = st.number_input("Camera index (0=กล้องในตัว, 1=Camo Camera)",min_value=0,max_value=4,value=0,step=1)
     if st.button("logs.csv"):
         if os.path.exists("logs.csv"):
             import pandas as pd
@@ -228,7 +296,6 @@ if not os.path.exists(model_path): st.error(f"ไม่พบ {model_path}"); st
 with st.spinner("กำลังโหลด..."):
     reader, model = load_models(model_path)
 st.success("พร้อมใช้งาน")
-
 
 tab_cam, tab_img = st.tabs(["Webcam","Upload"])
 with tab_cam:
@@ -289,10 +356,22 @@ with tab_img:
                 iH,iW=frame.shape[:2]; x1,y1,x2,y2=pad_box(x1,y1,x2,y2,iW,iH)
                 label=r.names[int(box.cls[0])]; vt=vtype(label,x1,y1,x2,y2)
                 asp=ASPECT.get(label.strip().lower(),1.0 if vt=="Motorcycle" else 2.8)
-                wr,th=warp_plate(frame[y1:y2,x1:x2],asp); pl,pv,co=read_plate(reader,th,vt)
-                draw_box(disp,x1,y1,x2,y2,pl,vt,conf_y*100)
+                wr,th=warp_plate(frame[y1:y2,x1:x2],asp)
+                raw_ocr_result=[r for r in reader.readtext(th,detail=1,paragraph=False,allowlist=ALLOW)
+                         +reader.readtext(th,detail=1,paragraph=False) if r[2]>0.05 and r[1].strip()]
+                pl,pv,co=read_plate(reader,th,vt)
+                if co<40:
+                    crop_raw=frame[y1:y2,x1:x2]
+                    if crop_raw.size>0:
+                        gray_fb=cv2.bilateralFilter(cv2.cvtColor(crop_raw,cv2.COLOR_BGR2GRAY),5,50,50)
+                        _,th_fb=cv2.threshold(gray_fb,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+                        th_fb=cv2.copyMakeBorder(th_fb,12,12,20,20,cv2.BORDER_CONSTANT,value=255)
+                        pl2,pv2,co2=read_plate(reader,th_fb,vt)
+                        if co2>co: pl,pv,co=pl2,pv2,co2
                 found.append({"vt":vt,"vth":"มอเตอร์ไซค์" if vt=="Motorcycle" else "รถยนต์",
-                              "cy":round(conf_y*100,1),"co":co,"plate":pl,"prov":pv,"crop":wr})
+                              "cy":round(conf_y*100,1),"co":co,"plate":pl,"prov":pv,"crop":wr,
+                              "raw_ocr":raw_ocr_result})
+                draw_box(disp,x1,y1,x2,y2,pl,vt,conf_y*100)
         with cb: st.markdown("**ผลลัพธ์**"); st.image(cv2.cvtColor(disp,cv2.COLOR_BGR2RGB),width=420)
         if found:
             st.markdown("---"); st.markdown("ป้ายทะเบียนที่พบ")
@@ -301,4 +380,7 @@ with tab_img:
                 with cols[i%3]:
                     st.markdown(card(r),unsafe_allow_html=True)
                     st.image(r["crop"],caption="ขึงแล้ว",width=320)
+                    with st.expander("🔍 Raw OCR debug"):
+                        for row in r.get("raw_ocr",[]):
+                            st.write(f"`{row[1]}` — conf: {row[2]:.2f}")
         else: st.warning("ไม่พบป้ายทะเบียน")
